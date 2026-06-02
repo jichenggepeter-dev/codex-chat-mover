@@ -5,6 +5,7 @@ try testSessionIndexReaderParsesJSONLines()
 try testSessionFileLocatorExtractsThreadIDFromRolloutFilename()
 try testScannerClassifiesCodexThreadsOutsideKnownProjects()
 try testSessionJSONLPatcherUpdatesNestedCWD()
+try testGlobalStateProjectRegistrarRegistersProjectThread()
 try testProjectCopyWriterCreatesMarkdownAndJSON()
 try testBackupManagerCanRestoreManifestBackup()
 try await testSafeThreadMoverStopsWhenCodexIsRunning()
@@ -112,6 +113,46 @@ func testSessionJSONLPatcherUpdatesNestedCWD() throws {
     let nested = payload?["nested"] as? [String: Any]
     expect(payload?["cwd"] as? String == "/new/path", "jsonl patcher did not update payload cwd")
     expect(nested?["cwd"] as? String == "/new/path", "jsonl patcher did not update nested cwd")
+}
+
+func testGlobalStateProjectRegistrarRegistersProjectThread() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-global-state-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let project = root.appendingPathComponent("projects/test")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+    let globalState = codexHome.appendingPathComponent(".codex-global-state.json")
+    try """
+    {
+      "electron-saved-workspace-roots": ["/existing/project"],
+      "project-order": ["/existing/project"],
+      "projectless-thread-ids": ["thread-a", "thread-move"],
+      "thread-workspace-root-hints": {"thread-move": "/Users/example/Documents/Codex"},
+      "thread-projectless-output-directories": {"thread-move": "/tmp/old-output"}
+    }
+    """.write(to: globalState, atomically: true, encoding: .utf8)
+
+    try GlobalStateProjectRegistrar().registerProjectAndThread(
+        projectPath: project,
+        threadID: "thread-move",
+        paths: CodexPaths(codexHome: codexHome)
+    )
+
+    let data = try Data(contentsOf: globalState)
+    let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let savedRoots = state?["electron-saved-workspace-roots"] as? [String]
+    let projectOrder = state?["project-order"] as? [String]
+    let projectless = state?["projectless-thread-ids"] as? [String]
+    let hints = state?["thread-workspace-root-hints"] as? [String: String]
+    let outputs = state?["thread-projectless-output-directories"] as? [String: Any]
+
+    expect(savedRoots?.contains(project.path) == true, "registrar did not add saved workspace root")
+    expect(projectOrder?.contains(project.path) == true, "registrar did not add project order")
+    expect(projectless == ["thread-a"], "registrar did not remove projectless thread id")
+    expect(hints?["thread-move"] == project.path, "registrar did not update workspace root hint")
+    expect(outputs?["thread-move"] == nil, "registrar did not remove projectless output directory")
 }
 
 func testProjectCopyWriterCreatesMarkdownAndJSON() throws {

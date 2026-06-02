@@ -8,6 +8,7 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
     private let processMonitor: CodexProcessMonitoring
     private let sqliteUpdater: SQLiteThreadUpdating
     private let jsonlPatcher: SessionJSONLPatching
+    private let projectRegistrar: CodexProjectRegistering
     private let projectCopyWriter: ProjectCopyWriting
 
     public init(
@@ -17,6 +18,7 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
         processMonitor: CodexProcessMonitoring = MacCodexProcessMonitor(),
         sqliteUpdater: SQLiteThreadUpdating = SQLiteThreadUpdater(),
         jsonlPatcher: SessionJSONLPatching = SessionJSONLPatcher(),
+        projectRegistrar: CodexProjectRegistering = GlobalStateProjectRegistrar(),
         projectCopyWriter: ProjectCopyWriting = ProjectCopyWriter()
     ) {
         self.paths = paths
@@ -25,6 +27,7 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
         self.processMonitor = processMonitor
         self.sqliteUpdater = sqliteUpdater
         self.jsonlPatcher = jsonlPatcher
+        self.projectRegistrar = projectRegistrar
         self.projectCopyWriter = projectCopyWriter
     }
 
@@ -47,6 +50,11 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
             let targetPath = project.path.standardizedFileURL
             try sqliteUpdater.updateThread(threadID: thread.id, cwd: targetPath.path, database: paths.stateDatabase)
             try jsonlPatcher.patchSessionFile(sessionFile, cwd: targetPath.path)
+            try projectRegistrar.registerProjectAndThread(
+                projectPath: targetPath,
+                threadID: thread.id,
+                paths: paths
+            )
             let copies = try projectCopyWriter.writeCopies(thread: thread, project: project, movedAt: backup.createdAt)
 
             guard try verify(threadID: thread.id, targetProjectPath: targetPath) else {
@@ -164,6 +172,8 @@ public struct BackupManager: BackupManaging {
             paths.stateDatabase,
             URL(fileURLWithPath: paths.stateDatabase.path + "-wal"),
             URL(fileURLWithPath: paths.stateDatabase.path + "-shm"),
+            paths.globalState,
+            URL(fileURLWithPath: paths.globalState.path + ".bak"),
             paths.sessionIndex,
             sessionFile.standardizedFileURL
         ]
@@ -349,6 +359,68 @@ public struct SessionJSONLPatcher: SessionJSONLPatching {
         }
 
         return value
+    }
+}
+
+public protocol CodexProjectRegistering {
+    func registerProjectAndThread(projectPath: URL, threadID: String, paths: CodexPaths) throws
+}
+
+public struct GlobalStateProjectRegistrar: CodexProjectRegistering {
+    private let fileManager: FileManager
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    public func registerProjectAndThread(projectPath: URL, threadID: String, paths: CodexPaths) throws {
+        let file = paths.globalState
+        guard fileManager.fileExists(atPath: file.path) else {
+            return
+        }
+
+        let data = try Data(contentsOf: file)
+        var state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let path = projectPath.standardizedFileURL.path
+
+        appendUnique(path, toArrayAt: "electron-saved-workspace-roots", in: &state)
+        appendUnique(path, toArrayAt: "project-order", in: &state)
+        remove(threadID, fromArrayAt: "projectless-thread-ids", in: &state)
+        upsertStringMapValue(path, for: threadID, at: "thread-workspace-root-hints", in: &state)
+        removeMapValue(for: threadID, at: "thread-projectless-output-directories", in: &state)
+
+        let output = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        try output.write(to: file, options: .atomic)
+    }
+
+    private func appendUnique(_ value: String, toArrayAt key: String, in state: inout [String: Any]) {
+        var array = state[key] as? [String] ?? []
+        if !array.contains(value) {
+            array.append(value)
+        }
+        state[key] = array
+    }
+
+    private func remove(_ value: String, fromArrayAt key: String, in state: inout [String: Any]) {
+        guard var array = state[key] as? [String] else {
+            return
+        }
+        array.removeAll { $0 == value }
+        state[key] = array
+    }
+
+    private func upsertStringMapValue(_ value: String, for mapKey: String, at key: String, in state: inout [String: Any]) {
+        var map = state[key] as? [String: String] ?? [:]
+        map[mapKey] = value
+        state[key] = map
+    }
+
+    private func removeMapValue(for mapKey: String, at key: String, in state: inout [String: Any]) {
+        guard var map = state[key] as? [String: Any] else {
+            return
+        }
+        map.removeValue(forKey: mapKey)
+        state[key] = map
     }
 }
 

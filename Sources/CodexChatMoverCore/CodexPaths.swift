@@ -15,6 +15,10 @@ public struct CodexPaths: Hashable, Sendable {
         codexHome.appendingPathComponent("session_index.jsonl")
     }
 
+    public var globalState: URL {
+        codexHome.appendingPathComponent(".codex-global-state.json")
+    }
+
     public var sessionsDirectory: URL {
         codexHome.appendingPathComponent("sessions")
     }
