@@ -1,5 +1,7 @@
 # Codex Chat Mover
 
+[中文说明](README.zh-CN.md) | English
+
 Move Codex chats into the right Codex projects.
 
 Codex Chat Mover is a lightweight macOS app for organizing local Codex Desktop
