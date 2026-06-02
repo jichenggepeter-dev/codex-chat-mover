@@ -109,16 +109,21 @@ public final class ProjectRegistry {
     }
 
     public func createNewProject() -> CodexProject? {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
+        let baseDirectory = defaultCodexProjectsDirectory()
+        try? FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+
+        let panel = NSSavePanel()
         panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose or create a folder for the new Codex project."
+        panel.directoryURL = baseDirectory
+        panel.nameFieldStringValue = "New Project"
+        panel.message = "Create a new project folder inside your Codex projects directory."
+        panel.prompt = "Create Project"
 
         guard panel.runModal() == .OK, let url = panel.url else {
             return nil
         }
+
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
         return CodexProject(
             id: "created-\(UUID().uuidString)",
@@ -127,6 +132,19 @@ public final class ProjectRegistry {
             source: .userCreated,
             chats: []
         )
+    }
+
+    private func defaultCodexProjectsDirectory(date: Date = Date()) -> URL {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        return URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Documents")
+            .appendingPathComponent("Codex")
+            .appendingPathComponent(formatter.string(from: date))
+            .appendingPathComponent("projects")
     }
 }
 

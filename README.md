@@ -27,6 +27,7 @@ adds that workflow as a small companion utility.
 - Filters out subagent, guardian, and internal delegation threads.
 - Hides generated one-off Codex workspaces from the project sidebar.
 - Shows real user projects and movable chats.
+- Creates new project folders in `~/Documents/Codex/<date>/projects` by default.
 - Drag a chat onto a project or a visible drop area.
 - Requires Codex Desktop to be closed before metadata writes.
 - Creates backups before moving.

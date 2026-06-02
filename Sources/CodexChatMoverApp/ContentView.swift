@@ -69,7 +69,7 @@ private struct ProjectSidebar: View {
                     Button("Add Existing Folder...") {
                         viewModel.addExistingProject()
                     }
-                    Button("Create New Project...") {
+                    Button("Create in Codex Projects...") {
                         viewModel.createNewProject()
                     }
                 } label: {
