@@ -36,7 +36,15 @@ func testSessionFileLocatorExtractsThreadIDFromRolloutFilename() throws {
 }
 
 func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
-    let paths = CodexPaths(codexHome: URL(fileURLWithPath: "/Users/example/.codex"))
+    let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-scan-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+    try """
+    {"id":"thread-project","thread_name":"Project thread from index","updated_at":"2026-06-01T12:00:00.000000Z"}
+    {"id":"thread-projectless","thread_name":"Projectless planning chat","updated_at":"2026-06-01T13:00:00Z"}
+    """.write(to: codexHome.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+    let paths = CodexPaths(codexHome: codexHome)
     let reader = FixtureThreadRecordReader(records: [
         ThreadRecord(
             id: "thread-project",
@@ -47,10 +55,10 @@ func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
             archived: false,
             createdAt: Date(timeIntervalSince1970: 10),
             updatedAt: Date(timeIntervalSince1970: 20)
-        ),
+            ),
             ThreadRecord(
                 id: "thread-projectless",
-                cwd: "/Users/example/.codex/threads",
+                cwd: paths.projectlessThreadsDirectory.path,
                 title: "",
             firstUserMessage: "Plan a tool",
             preview: nil,
@@ -88,8 +96,9 @@ func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
         expect(snapshot.projects.count == 1, "scanner should discover one project")
         expect(snapshot.projects.first?.path.path == "/Users/example/Code/app", "scanner discovered wrong project path")
         expect(snapshot.projects.first?.chats.first?.id == "thread-project", "scanner did not assign project thread")
+        expect(snapshot.projects.first?.chats.first?.title == "Project thread from index", "scanner should prefer session index title")
         expect(snapshot.unassignedThreads.map(\.id) == ["thread-generated-workspace", "thread-projectless"], "scanner did not keep non-project threads unassigned")
-        expect(snapshot.unassignedThreads.last?.title == "Plan a tool", "scanner did not fall back to first message title")
+        expect(snapshot.unassignedThreads.last?.title == "Projectless planning chat", "scanner did not use session index title for projectless chat")
         expect(!snapshot.projects.flatMap(\.chats).contains { $0.id == "thread-subagent" }, "scanner should hide subagent threads")
     }
 

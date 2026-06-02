@@ -93,7 +93,7 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
     }
 
     private func bestTitle(record: ThreadRecord, indexEntry: SessionIndexEntry?) -> String {
-        let candidates = [record.title, indexEntry?.threadName, record.firstUserMessage]
+        let candidates = [indexEntry?.threadName, record.title, record.firstUserMessage]
         for candidate in candidates {
             let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !trimmed.isEmpty {

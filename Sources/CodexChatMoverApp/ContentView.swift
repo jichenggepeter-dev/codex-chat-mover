@@ -80,11 +80,15 @@ private struct ProjectSidebar: View {
                 Spacer()
 
                 Button {
-                    viewModel.reloadPreferredData()
+                    if viewModel.lastMove != nil {
+                        viewModel.undoLastMove()
+                    } else {
+                        viewModel.reloadPreferredData()
+                    }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: viewModel.lastMove == nil ? "arrow.clockwise" : "arrow.uturn.backward")
                 }
-                .help("Rescan")
+                .help(viewModel.lastMove == nil ? "Rescan" : "Undo Last Move")
             }
             .padding(10)
         }
