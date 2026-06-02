@@ -1,0 +1,10 @@
+.build/
+.DS_Store
+
+# Built app bundles and local generated artifacts.
+outputs/
+
+# SwiftPM and Xcode local state.
+.swiftpm/
+*.xcuserdata/
+DerivedData/
