@@ -80,7 +80,7 @@ private struct ProjectSidebar: View {
                 Spacer()
 
                 Button {
-                    viewModel.reloadLiveData()
+                    viewModel.reloadPreferredData()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -317,7 +317,7 @@ private struct MoveStatusOverlay: View {
                     .foregroundStyle(.secondary)
             }
         case .succeeded:
-            StatusCard {
+            StatusCard(onClose: viewModel.dismissMoveStatus) {
                 Text("Moved and verified")
                     .font(.headline)
                 Text("Open Codex Desktop to refresh the sidebar and continue working.")
@@ -334,7 +334,7 @@ private struct MoveStatusOverlay: View {
                 }
             }
         case let .failed(message):
-            StatusCard {
+            StatusCard(onClose: viewModel.dismissMoveStatus) {
                 Text("Move failed")
                     .font(.headline)
                 Text(message)
@@ -346,11 +346,30 @@ private struct MoveStatusOverlay: View {
 }
 
 private struct StatusCard<Content: View>: View {
+    var onClose: (() -> Void)?
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            content
+            if let onClose {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        content
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .imageScale(.medium)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Dismiss")
+                }
+            } else {
+                content
+            }
         }
         .padding(14)
         .frame(width: 360, alignment: .leading)

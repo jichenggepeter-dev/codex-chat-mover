@@ -58,14 +58,18 @@ final class AppViewModel: ObservableObject {
     func reload() {
         do {
             let snapshot = try scanner.scan()
-            projects = snapshot.projects
-            unassignedThreads = snapshot.unassignedThreads
-            dataStatus = "Sample data"
-            selectedProjectID = selectedProjectID ?? projects.first?.id
-            expandedProjectIDs = Set(projects.prefix(3).map(\.id))
+            applySnapshot(snapshot, status: "Sample data")
         } catch {
             moveState = .failed("Could not scan Codex data: \(error.localizedDescription)")
         }
+    }
+
+    func reloadPreferredData() {
+        guard liveScanner != nil else {
+            reload()
+            return
+        }
+        reloadLiveData()
     }
 
     func reloadLiveData() {
@@ -78,12 +82,11 @@ final class AppViewModel: ObservableObject {
                 let snapshot = try liveScanner.scan()
                 await MainActor.run {
                     if !snapshot.projects.isEmpty || !snapshot.unassignedThreads.isEmpty {
-                        self.projects = snapshot.projects
-                        self.unassignedThreads = snapshot.unassignedThreads
-                        self.selectedProjectID = snapshot.projects.first?.id
-                        self.expandedProjectIDs = Set(snapshot.projects.prefix(3).map(\.id))
                         let chatCount = snapshot.projects.reduce(snapshot.unassignedThreads.count) { $0 + $1.chats.count }
-                        self.dataStatus = "Live Codex data: \(snapshot.projects.count) projects, \(chatCount) chats"
+                        self.applySnapshot(
+                            snapshot,
+                            status: "Live Codex data: \(snapshot.projects.count) projects, \(chatCount) chats"
+                        )
                     }
                 }
             } catch {
@@ -91,6 +94,47 @@ final class AppViewModel: ObservableObject {
                     self.moveState = .failed("Could not scan Codex data: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    private func applySnapshot(_ snapshot: CodexStoreSnapshot, status: String) {
+        let previousSelection = selectedProjectID
+        projects = snapshot.projects
+        unassignedThreads = snapshot.unassignedThreads
+        dataStatus = status
+
+        if let previousSelection,
+           projects.contains(where: { $0.id == previousSelection }) {
+            selectedProjectID = previousSelection
+        } else {
+            selectedProjectID = projects.first?.id
+        }
+
+        if expandedProjectIDs.isEmpty {
+            expandedProjectIDs = Set(projects.prefix(3).map(\.id))
+        } else {
+            let validProjectIDs = Set(projects.map(\.id))
+            expandedProjectIDs = expandedProjectIDs.intersection(validProjectIDs)
+            if let selectedProjectID {
+                expandedProjectIDs.insert(selectedProjectID)
+            }
+        }
+    }
+
+    func dismissMoveStatus() {
+        switch moveState {
+        case .running:
+            return
+        case .idle, .succeeded, .failed:
+            moveState = .idle
+        }
+    }
+
+    private func reloadAfterUndo() {
+        if liveScanner != nil {
+            reloadLiveData()
+        } else {
+            reload()
         }
     }
 
@@ -167,7 +211,7 @@ final class AppViewModel: ObservableObject {
                 try moveRestorer.restore(moveRecord: move)
                 lastMove = nil
                 moveState = .idle
-                reload()
+                reloadAfterUndo()
             } catch {
                 moveState = .failed("Could not undo move: \(error.localizedDescription)")
             }
