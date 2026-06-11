@@ -184,7 +184,8 @@ final class AppViewModel: ObservableObject {
     }
 
     func requestMoveToChats(threadID: String) {
-        guard let thread = findThread(threadID) else {
+        guard let thread = findThread(threadID),
+              case .project = thread.assignment else {
             return
         }
         pendingMove = PendingMove(thread: thread, project: nil)

@@ -44,6 +44,7 @@ private struct ProjectSidebar: View {
                             ForEach(viewModel.filteredProjectChats(project)) { chat in
                                 ChatRow(thread: chat, compact: true)
                                     .padding(.leading, 6)
+                                    .draggable(chat.id)
                             }
                         } label: {
                             ProjectRow(project: project, isSelected: viewModel.selectedProjectID == project.id)
@@ -143,6 +144,12 @@ private struct ChatWorkspace: View {
                         ChatRow(thread: thread)
                             .draggable(thread.id)
                     }
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    items.forEach { threadID in
+                        viewModel.requestMoveToChats(threadID: threadID)
+                    }
+                    return true
                 }
                 .frame(minWidth: 420)
 
