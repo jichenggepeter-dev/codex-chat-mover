@@ -151,6 +151,7 @@ public final class ProjectRegistry {
 @MainActor
 public protocol ThreadMoving {
     func move(thread: CodexThread, to project: CodexProject) async throws -> MoveRecord
+    func moveToChats(thread: CodexThread) async throws -> MoveRecord
 }
 
 @MainActor
@@ -175,6 +176,20 @@ public struct PreviewThreadMover: ThreadMoving {
             jsonCopyPath: nil
         )
     }
+
+    public func moveToChats(thread: CodexThread) async throws -> MoveRecord {
+        try await Task.sleep(for: .milliseconds(700))
+        return MoveRecord(
+            id: UUID().uuidString,
+            threadId: thread.id,
+            fromPath: thread.currentPath,
+            toProjectPath: URL(fileURLWithPath: "\(NSHomeDirectory())/.codex/threads"),
+            movedAt: Date(),
+            backupPath: nil,
+            markdownCopyPath: nil,
+            jsonCopyPath: nil
+        )
+    }
 }
 
 public struct CodexLauncher {
@@ -183,6 +198,25 @@ public struct CodexLauncher {
     public func openCodex() {
         if let url = URL(string: "codex://threads/") {
             NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+public struct CodexDesktopController {
+    public init() {}
+
+    @discardableResult
+    public func quitCodexDesktop() -> Bool {
+        let apps = NSWorkspace.shared.runningApplications.filter { app in
+            app.bundleIdentifier == "com.openai.codex" || app.localizedName == "Codex"
+        }
+
+        guard !apps.isEmpty else {
+            return true
+        }
+
+        return apps.reduce(true) { success, app in
+            app.terminate() && success
         }
     }
 }

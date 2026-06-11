@@ -14,9 +14,10 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
 
     public func scan() throws -> CodexStoreSnapshot {
         let index = try SessionIndexReader(fileURL: paths.sessionIndex).readEntriesByID()
+        let pinnedThreadIDs = readPinnedThreadIDs()
         let records = try threadRecordReader.readThreadRecords(from: paths)
             .filter { !$0.archived }
-            .filter(\.isUserVisible)
+            .filter { $0.isUserVisible || pinnedThreadIDs.contains($0.id) }
 
         let threads = records.map { record in
             let indexEntry = index[record.id]
@@ -153,6 +154,17 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
 
     private func sortThreadsByUpdatedAtDescending(_ lhs: CodexThread, _ rhs: CodexThread) -> Bool {
         (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+    }
+
+    private func readPinnedThreadIDs() -> Set<String> {
+        guard FileManager.default.fileExists(atPath: paths.globalState.path),
+              let data = try? Data(contentsOf: paths.globalState),
+              let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ids = state["pinned-thread-ids"] as? [String] else {
+            return []
+        }
+
+        return Set(ids)
     }
 }
 

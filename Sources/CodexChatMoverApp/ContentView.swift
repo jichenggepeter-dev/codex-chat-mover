@@ -123,7 +123,7 @@ private struct ChatWorkspace: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Movable Chats")
                         .font(.title2.weight(.semibold))
-                    Text("\(viewModel.dataStatus). Drag any chat onto the selected project to move it.")
+                    Text("\(viewModel.dataStatus). Drag any chat onto a project, or drop it back into standalone Chats.")
                         .foregroundStyle(.secondary)
                 }
 
@@ -184,6 +184,9 @@ private struct SelectedProjectDropPanel: View {
             DropTarget(project: project)
                 .environmentObject(viewModel)
 
+            ProjectlessDropTarget()
+                .environmentObject(viewModel)
+
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
@@ -234,6 +237,36 @@ private struct DropTarget: View {
     }
 }
 
+private struct ProjectlessDropTarget: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "tray.and.arrow.up")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+            Text("Move back to Chats")
+                .font(.headline)
+            Text("Take the dragged chat out of a project and make it a standalone chat again")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, minHeight: 120)
+        .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
+        }
+        .dropDestination(for: String.self) { items, _ in
+            items.forEach { threadID in
+                viewModel.requestMoveToChats(threadID: threadID)
+            }
+            return true
+        }
+    }
+}
+
 private struct ChatRow: View {
     let thread: CodexThread
     var compact = false
@@ -267,19 +300,25 @@ private struct MoveConfirmationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Move chat to \"\(move.project.name)\"?", systemImage: "arrow.right.folder")
+            Label(titleText, systemImage: iconName)
                 .font(.title3.weight(.semibold))
 
-            Text("A backup will be created first. The chat should appear under this project after Codex Desktop restarts.")
+            Text(messageText)
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(move.thread.title)
                     .font(.headline)
-                Text(move.project.path.path)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                if let project = move.project {
+                    Text(project.path.path)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } else {
+                    Text("Destination: standalone Chats")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding()
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
@@ -298,6 +337,24 @@ private struct MoveConfirmationView: View {
         .padding(24)
         .frame(width: 460)
     }
+
+    private var titleText: String {
+        if let project = move.project {
+            return "Move chat to \"\(project.name)\"?"
+        }
+        return "Move chat back to Chats?"
+    }
+
+    private var iconName: String {
+        move.project == nil ? "tray.and.arrow.up" : "arrow.right.folder"
+    }
+
+    private var messageText: String {
+        if move.project != nil {
+            return "A backup will be created first. The chat should appear under this project after Codex Desktop restarts."
+        }
+        return "A backup will be created first. The chat should be removed from its project and appear again in the standalone Chats list after Codex Desktop restarts."
+    }
 }
 
 private struct MoveStatusOverlay: View {
@@ -315,6 +372,23 @@ private struct MoveStatusOverlay: View {
                 Text(step.rawValue)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+        case .needsCodexQuit:
+            StatusCard(onClose: viewModel.dismissMoveStatus) {
+                Text("Codex Desktop is still open")
+                    .font(.headline)
+                Text("Codex needs to be closed before local metadata can be moved safely.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Cancel") {
+                        viewModel.dismissMoveStatus()
+                    }
+                    Button("Quit Codex and Retry") {
+                        viewModel.quitCodexAndRetryMove()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
             }
         case .succeeded:
             StatusCard(onClose: viewModel.dismissMoveStatus) {

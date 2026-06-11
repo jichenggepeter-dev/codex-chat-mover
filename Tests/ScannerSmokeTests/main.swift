@@ -4,8 +4,10 @@ import Foundation
 try testSessionIndexReaderParsesJSONLines()
 try testSessionFileLocatorExtractsThreadIDFromRolloutFilename()
 try testScannerClassifiesCodexThreadsOutsideKnownProjects()
+try testScannerKeepsPinnedDelegationThreadsVisible()
 try testSessionJSONLPatcherUpdatesNestedCWD()
 try testGlobalStateProjectRegistrarRegistersProjectThread()
+try testGlobalStateProjectRegistrarRegistersProjectlessThread()
 try testProjectCopyWriterCreatesMarkdownAndJSON()
 try testBackupManagerCanRestoreManifestBackup()
 try await testSafeThreadMoverStopsWhenCodexIsRunning()
@@ -102,6 +104,37 @@ func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
         expect(!snapshot.projects.flatMap(\.chats).contains { $0.id == "thread-subagent" }, "scanner should hide subagent threads")
     }
 
+func testScannerKeepsPinnedDelegationThreadsVisible() throws {
+    let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-pinned-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+    try """
+    {"pinned-thread-ids":["thread-pinned"]}
+    """.write(to: codexHome.appendingPathComponent(".codex-global-state.json"), atomically: true, encoding: .utf8)
+    try """
+    {"id":"thread-pinned","thread_name":"Pinned Delegation Thread","updated_at":"2026-06-01T13:00:00Z"}
+    """.write(to: codexHome.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+    let reader = FixtureThreadRecordReader(records: [
+        ThreadRecord(
+            id: "thread-pinned",
+            cwd: "/Users/example/Code/pinned",
+            title: "<codex_delegation> internal title",
+            firstUserMessage: "<codex_delegation> internal message",
+            preview: "Pinned preview",
+            archived: false,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+    ])
+
+    let scanner = LiveCodexStoreScanner(paths: CodexPaths(codexHome: codexHome), threadRecordReader: reader)
+    let snapshot = try scanner.scan()
+
+    expect(snapshot.projects.count == 1, "pinned delegation thread should remain visible")
+    expect(snapshot.projects.first?.chats.first?.title == "Pinned Delegation Thread", "pinned delegation thread should use session index title")
+}
+
 func testSessionJSONLPatcherUpdatesNestedCWD() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("codex-chat-mover-jsonl-\(UUID().uuidString)")
@@ -162,6 +195,34 @@ func testGlobalStateProjectRegistrarRegistersProjectThread() throws {
     expect(projectless == ["thread-a"], "registrar did not remove projectless thread id")
     expect(hints?["thread-move"] == project.path, "registrar did not update workspace root hint")
     expect(outputs?["thread-move"] == nil, "registrar did not remove projectless output directory")
+}
+
+func testGlobalStateProjectRegistrarRegistersProjectlessThread() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-projectless-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+
+    let globalState = codexHome.appendingPathComponent(".codex-global-state.json")
+    try """
+    {
+      "projectless-thread-ids": ["thread-a"],
+      "thread-workspace-root-hints": {"thread-move": "/Users/example/Documents/Project"}
+    }
+    """.write(to: globalState, atomically: true, encoding: .utf8)
+
+    try GlobalStateProjectRegistrar().registerProjectlessThread(
+        threadID: "thread-move",
+        paths: CodexPaths(codexHome: codexHome)
+    )
+
+    let data = try Data(contentsOf: globalState)
+    let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let projectless = state?["projectless-thread-ids"] as? [String]
+    let hints = state?["thread-workspace-root-hints"] as? [String: String]
+
+    expect(projectless?.contains("thread-move") == true, "registrar did not add projectless thread id")
+    expect(hints?["thread-move"] == nil, "registrar did not remove workspace root hint")
 }
 
 func testProjectCopyWriterCreatesMarkdownAndJSON() throws {

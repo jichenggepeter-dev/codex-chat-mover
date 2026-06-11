@@ -21,13 +21,15 @@ final class AppViewModel: ObservableObject {
     private let threadMover: ThreadMoving
     private let moveRestorer: MoveRestoring?
     private let codexLauncher: CodexLauncher
+    private let codexDesktopController: CodexDesktopController
 
     init(
         scanner: CodexStoreScanning,
         liveScanner: CodexStoreScanning? = nil,
         projectRegistry: ProjectRegistry,
         threadMover: ThreadMoving,
-        codexLauncher: CodexLauncher
+        codexLauncher: CodexLauncher,
+        codexDesktopController: CodexDesktopController = CodexDesktopController()
     ) {
         self.scanner = scanner
         self.liveScanner = liveScanner
@@ -35,6 +37,7 @@ final class AppViewModel: ObservableObject {
         self.threadMover = threadMover
         self.moveRestorer = threadMover as? MoveRestoring
         self.codexLauncher = codexLauncher
+        self.codexDesktopController = codexDesktopController
         reload()
         reloadLiveData()
     }
@@ -125,7 +128,7 @@ final class AppViewModel: ObservableObject {
         switch moveState {
         case .running:
             return
-        case .idle, .succeeded, .failed:
+        case .idle, .succeeded, .failed, .needsCodexQuit:
             moveState = .idle
         }
     }
@@ -180,6 +183,13 @@ final class AppViewModel: ObservableObject {
         pendingMove = PendingMove(thread: thread, project: project)
     }
 
+    func requestMoveToChats(threadID: String) {
+        guard let thread = findThread(threadID) else {
+            return
+        }
+        pendingMove = PendingMove(thread: thread, project: nil)
+    }
+
     func confirmPendingMove() {
         guard let move = pendingMove else {
             return
@@ -199,6 +209,25 @@ final class AppViewModel: ObservableObject {
 
     func openCodex() {
         codexLauncher.openCodex()
+    }
+
+    func quitCodexAndRetryMove() {
+        guard case let .needsCodexQuit(move) = moveState else {
+            return
+        }
+
+        moveState = .running(step: .checkingCodex, completed: 0)
+
+        Task {
+            let didRequestQuit = codexDesktopController.quitCodexDesktop()
+            guard didRequestQuit else {
+                moveState = .failed("Could not ask Codex Desktop to quit. Please close Codex Desktop and try again.")
+                return
+            }
+
+            try? await Task.sleep(for: .milliseconds(1_500))
+            await performPreviewMove(move)
+        }
     }
 
     func undoLastMove() {
@@ -228,6 +257,18 @@ final class AppViewModel: ObservableObject {
             chat.currentPath = move.fromPath
             chat.assignment = .outsideKnownProjects
             unassignedThreads.insert(chat, at: 0)
+        } else if let chatIndex = unassignedThreads.firstIndex(where: { $0.id == move.threadId }) {
+            var chat = unassignedThreads.remove(at: chatIndex)
+            chat.currentPath = move.fromPath
+
+            if let fromPath = move.fromPath,
+               let projectIndex = projects.firstIndex(where: { $0.path == fromPath }) {
+                chat.assignment = .project(projects[projectIndex].id)
+                projects[projectIndex].chats.insert(chat, at: 0)
+            } else {
+                chat.assignment = .outsideKnownProjects
+                unassignedThreads.insert(chat, at: 0)
+            }
         }
         lastMove = nil
         moveState = .idle
@@ -242,12 +283,22 @@ final class AppViewModel: ObservableObject {
         }
 
         do {
-            let record = try await threadMover.move(thread: move.thread, to: move.project)
-            applyMove(thread: move.thread, to: move.project)
+            let record: MoveRecord
+            if let project = move.project {
+                record = try await threadMover.move(thread: move.thread, to: project)
+                applyMove(thread: move.thread, to: project)
+            } else {
+                record = try await threadMover.moveToChats(thread: move.thread)
+                applyMoveToChats(thread: move.thread)
+            }
             lastMove = record
             moveState = .succeeded(record)
         } catch {
-            moveState = .failed(error.localizedDescription)
+            if case MoveError.codexDesktopIsRunning = error {
+                moveState = .needsCodexQuit(move)
+            } else {
+                moveState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -269,6 +320,20 @@ final class AppViewModel: ObservableObject {
         projects[projectIndex].chats.insert(movedThread, at: 0)
         selectedProjectID = project.id
         expandedProjectIDs.insert(project.id)
+    }
+
+    private func applyMoveToChats(thread: CodexThread) {
+        for index in projects.indices {
+            projects[index].chats.removeAll { $0.id == thread.id }
+        }
+
+        var movedThread = thread
+        movedThread.currentPath = nil
+        movedThread.assignment = .outsideKnownProjects
+        movedThread.updatedAt = Date()
+
+        unassignedThreads.removeAll { $0.id == thread.id }
+        unassignedThreads.insert(movedThread, at: 0)
     }
 
     private func findThread(_ id: String) -> CodexThread? {
@@ -294,12 +359,13 @@ final class AppViewModel: ObservableObject {
 struct PendingMove: Identifiable {
     let id = UUID()
     let thread: CodexThread
-    let project: CodexProject
+    let project: CodexProject?
 }
 
 enum MoveState {
     case idle
     case running(step: MoveProgressStep, completed: Double)
+    case needsCodexQuit(PendingMove)
     case succeeded(MoveRecord)
     case failed(String)
 }

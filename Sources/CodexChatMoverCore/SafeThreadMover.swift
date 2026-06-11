@@ -77,6 +77,50 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
         }
     }
 
+    public func moveToChats(thread: CodexThread) async throws -> MoveRecord {
+        guard !processMonitor.isCodexDesktopRunning() else {
+            throw MoveError.codexDesktopIsRunning
+        }
+
+        guard let sessionFile = thread.sessionFile else {
+            throw MoveError.missingSessionFile(thread.id)
+        }
+
+        let backup = try backupManager.createBackup(
+            paths: paths,
+            threadID: thread.id,
+            sessionFile: sessionFile
+        )
+
+        do {
+            let targetPath = paths.projectlessThreadsDirectory.standardizedFileURL
+            try sqliteUpdater.updateThread(threadID: thread.id, cwd: targetPath.path, database: paths.stateDatabase)
+            try jsonlPatcher.patchSessionFile(sessionFile, cwd: targetPath.path)
+            try projectRegistrar.registerProjectlessThread(
+                threadID: thread.id,
+                paths: paths
+            )
+
+            guard try verifyProjectless(threadID: thread.id) else {
+                throw MoveError.verificationFailed
+            }
+
+            return MoveRecord(
+                id: backup.id,
+                threadId: thread.id,
+                fromPath: thread.currentPath,
+                toProjectPath: targetPath,
+                movedAt: backup.createdAt,
+                backupPath: backup.directory,
+                markdownCopyPath: nil,
+                jsonCopyPath: nil
+            )
+        } catch {
+            try? backupManager.restore(backup)
+            throw error
+        }
+    }
+
     public func restore(moveRecord: MoveRecord) throws {
         guard let backupPath = moveRecord.backupPath else {
             throw MoveError.missingBackup
@@ -89,6 +133,10 @@ public struct SafeThreadMover: ThreadMoving, MoveRestoring {
             .first { $0.path.standardizedFileURL.path == targetProjectPath.path }?
             .chats
             .contains { $0.id == threadID } == true
+    }
+
+    private func verifyProjectless(threadID: String) throws -> Bool {
+        try scanner.scan().unassignedThreads.contains { $0.id == threadID }
     }
 }
 
@@ -364,6 +412,7 @@ public struct SessionJSONLPatcher: SessionJSONLPatching {
 
 public protocol CodexProjectRegistering {
     func registerProjectAndThread(projectPath: URL, threadID: String, paths: CodexPaths) throws
+    func registerProjectlessThread(threadID: String, paths: CodexPaths) throws
 }
 
 public struct GlobalStateProjectRegistrar: CodexProjectRegistering {
@@ -388,6 +437,22 @@ public struct GlobalStateProjectRegistrar: CodexProjectRegistering {
         remove(threadID, fromArrayAt: "projectless-thread-ids", in: &state)
         upsertStringMapValue(path, for: threadID, at: "thread-workspace-root-hints", in: &state)
         removeMapValue(for: threadID, at: "thread-projectless-output-directories", in: &state)
+
+        let output = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        try output.write(to: file, options: .atomic)
+    }
+
+    public func registerProjectlessThread(threadID: String, paths: CodexPaths) throws {
+        let file = paths.globalState
+        guard fileManager.fileExists(atPath: file.path) else {
+            return
+        }
+
+        let data = try Data(contentsOf: file)
+        var state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+        appendUnique(threadID, toArrayAt: "projectless-thread-ids", in: &state)
+        removeMapValue(for: threadID, at: "thread-workspace-root-hints", in: &state)
 
         let output = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         try output.write(to: file, options: .atomic)
