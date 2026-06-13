@@ -4,6 +4,7 @@ import Foundation
 try testSessionIndexReaderParsesJSONLines()
 try testSessionFileLocatorExtractsThreadIDFromRolloutFilename()
 try testScannerClassifiesCodexThreadsOutsideKnownProjects()
+try testScannerBackfillsThreadsMissingFromSQLite()
 try testScannerKeepsPinnedDelegationThreadsVisible()
 try testSessionJSONLPatcherUpdatesNestedCWD()
 try testGlobalStateProjectRegistrarRegistersProjectThread()
@@ -103,6 +104,35 @@ func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
         expect(snapshot.unassignedThreads.last?.title == "Projectless planning chat", "scanner did not use session index title for projectless chat")
         expect(!snapshot.projects.flatMap(\.chats).contains { $0.id == "thread-subagent" }, "scanner should hide subagent threads")
     }
+
+func testScannerBackfillsThreadsMissingFromSQLite() throws {
+    let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-backfill-\(UUID().uuidString)")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/06/12", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+
+    let threadID = "019ebf04-faf8-72b1-a811-4f81cf657b2e"
+    try """
+    {"id":"\(threadID)","thread_name":"分析数据并讨论建模方法","updated_at":"2026-06-13T03:28:58.670213Z"}
+    """.write(to: codexHome.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+    let sessionFile = sessions.appendingPathComponent("rollout-2026-06-12T23-27-15-\(threadID).jsonl")
+    try """
+    {"type":"session_meta","payload":{"id":"\(threadID)","timestamp":"2026-06-13T03:27:15.193Z","cwd":"/Users/example/Documents/oyster","source":"vscode","thread_source":"user"}}
+    {"type":"message","payload":{"text":"hello"}}
+    """.write(to: sessionFile, atomically: true, encoding: .utf8)
+
+    let scanner = LiveCodexStoreScanner(
+        paths: CodexPaths(codexHome: codexHome),
+        threadRecordReader: FixtureThreadRecordReader(records: [])
+    )
+    let snapshot = try scanner.scan()
+
+    expect(snapshot.projects.count == 1, "scanner should discover project from session metadata")
+    expect(snapshot.projects.first?.name == "oyster", "scanner discovered wrong session-backed project")
+    expect(snapshot.projects.first?.chats.first?.id == threadID, "scanner did not backfill missing sqlite thread")
+    expect(snapshot.projects.first?.chats.first?.title == "分析数据并讨论建模方法", "scanner did not use session index title for backfilled thread")
+}
 
 func testScannerKeepsPinnedDelegationThreadsVisible() throws {
     let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())

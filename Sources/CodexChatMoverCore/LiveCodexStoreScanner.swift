@@ -19,7 +19,8 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
             .filter { !$0.archived }
             .filter { $0.isUserVisible || pinnedThreadIDs.contains($0.id) }
 
-        let threads = records.map { record in
+        let recordIDs = Set(records.map(\.id))
+        let sqliteThreads = records.map { record in
             let indexEntry = index[record.id]
             return CodexThread(
                 id: record.id,
@@ -32,6 +33,12 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
                 assignment: .outsideKnownProjects
             )
         }
+        let sessionBackfillThreads = backfillThreadsFromSessionFiles(
+            index: index,
+            existingIDs: recordIDs,
+            pinnedThreadIDs: pinnedThreadIDs
+        )
+        let threads = sqliteThreads + sessionBackfillThreads
 
         let projectPaths = discoverProjectPaths(from: threads)
         let projectIDsByPath = Dictionary(uniqueKeysWithValues: projectPaths.map { path in
@@ -93,8 +100,8 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         }
     }
 
-    private func bestTitle(record: ThreadRecord, indexEntry: SessionIndexEntry?) -> String {
-        let candidates = [indexEntry?.threadName, record.title, record.firstUserMessage]
+    private func bestTitle(record: ThreadRecord?, indexEntry: SessionIndexEntry?) -> String {
+        let candidates = [indexEntry?.threadName, record?.title, record?.firstUserMessage]
         for candidate in candidates {
             let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !trimmed.isEmpty {
@@ -156,6 +163,63 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
     }
 
+    private func backfillThreadsFromSessionFiles(
+        index: [String: SessionIndexEntry],
+        existingIDs: Set<String>,
+        pinnedThreadIDs: Set<String>
+    ) -> [CodexThread] {
+        let sessionFiles = SessionFileLocator(sessionsDirectory: paths.sessionsDirectory).locateByThreadID()
+
+        return index.compactMap { id, indexEntry -> CodexThread? in
+            guard !existingIDs.contains(id),
+                  let sessionFile = sessionFiles[id],
+                  let metadata = readSessionMetadata(from: sessionFile),
+                  metadata.id == id,
+                  metadata.isUserVisible || pinnedThreadIDs.contains(id) else {
+                return nil
+            }
+
+            return CodexThread(
+                id: id,
+                title: bestTitle(record: nil, indexEntry: indexEntry),
+                currentPath: URL(fileURLWithPath: metadata.cwd).standardizedFileURL,
+                sessionFile: sessionFile,
+                createdAt: metadata.createdAt,
+                updatedAt: indexEntry.updatedAt ?? metadata.createdAt,
+                preview: nil,
+                assignment: .outsideKnownProjects
+            )
+        }
+    }
+
+    private func readSessionMetadata(from file: URL) -> SessionFileMetadata? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else {
+            return nil
+        }
+        defer {
+            try? handle.close()
+        }
+
+        guard let data = try? handle.read(upToCount: 1_048_576),
+              let firstLine = data.split(separator: UInt8(ascii: "\n")).first,
+              let object = try? JSONSerialization.jsonObject(with: Data(firstLine)) as? [String: Any],
+              object["type"] as? String == "session_meta",
+              let payload = object["payload"] as? [String: Any],
+              let id = payload["id"] as? String,
+              let cwd = payload["cwd"] as? String else {
+            return nil
+        }
+
+        return SessionFileMetadata(
+            id: id,
+            cwd: cwd,
+            source: payload["source"] as? String,
+            threadSource: payload["thread_source"] as? String,
+            agentPath: payload["agent_path"] as? String,
+            createdAt: (payload["timestamp"] as? String).flatMap(DateParsers.parseCodexDate)
+        )
+    }
+
     private func readPinnedThreadIDs() -> Set<String> {
         guard FileManager.default.fileExists(atPath: paths.globalState.path),
               let data = try? Data(contentsOf: paths.globalState),
@@ -165,6 +229,28 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         }
 
         return Set(ids)
+    }
+}
+
+private struct SessionFileMetadata {
+    let id: String
+    let cwd: String
+    let source: String?
+    let threadSource: String?
+    let agentPath: String?
+    let createdAt: Date?
+
+    var isUserVisible: Bool {
+        if threadSource?.localizedCaseInsensitiveContains("subagent") == true {
+            return false
+        }
+        if source?.localizedCaseInsensitiveContains("subagent") == true {
+            return false
+        }
+        if agentPath?.isEmpty == false {
+            return false
+        }
+        return true
     }
 }
 
