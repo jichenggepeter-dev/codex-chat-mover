@@ -110,7 +110,16 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         var seen: Set<String> = []
         var result: [URL] = []
 
-        for path in global + discovered {
+        for path in global {
+            let standardized = path.standardizedFileURL
+            guard !seen.contains(standardized.path) else {
+                continue
+            }
+            seen.insert(standardized.path)
+            result.append(standardized)
+        }
+
+        for path in discovered {
             let standardized = path.standardizedFileURL
             guard !seen.contains(standardized.path),
                   !isGeneratedCodexWorkspace(standardized) else {

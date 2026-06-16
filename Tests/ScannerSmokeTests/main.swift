@@ -131,6 +131,31 @@ func testScannerShowsProjectsFromGlobalStateWithoutThreads() throws {
     expect(snapshot.projects.first?.chats.isEmpty == true, "global project without threads should be empty")
 }
 
+func testScannerShowsGeneratedWorkspaceWhenSavedInGlobalState() throws {
+    let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-global-generated-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+    try """
+    {
+      "electron-saved-workspace-roots": ["/Users/example/Documents/Codex/2026-06-16/关联方结构图"],
+      "project-order": ["/Users/example/Documents/Codex/2026-06-16/关联方结构图"],
+      "electron-workspace-root-labels": {
+        "/Users/example/Documents/Codex/2026-06-16/关联方结构图": "关联方结构图（20260616）"
+      }
+    }
+    """.write(to: codexHome.appendingPathComponent(".codex-global-state.json"), atomically: true, encoding: .utf8)
+
+    let scanner = LiveCodexStoreScanner(
+        paths: CodexPaths(codexHome: codexHome),
+        threadRecordReader: FixtureThreadRecordReader(records: [])
+    )
+    let snapshot = try scanner.scan()
+
+    expect(snapshot.projects.count == 1, "scanner should show generated workspaces saved in Codex global state")
+    expect(snapshot.projects.first?.name == "关联方结构图（20260616）", "scanner should keep Codex label for generated global project")
+    expect(snapshot.projects.first?.chats.isEmpty == true, "saved generated workspace without threads should be empty")
+}
+
 func testScannerBackfillsThreadsMissingFromSQLite() throws {
     let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("codex-chat-mover-backfill-\(UUID().uuidString)")
