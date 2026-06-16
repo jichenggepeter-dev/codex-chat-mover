@@ -40,23 +40,29 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         )
         let threads = sqliteThreads + sessionBackfillThreads
 
-        let projectPaths = discoverProjectPaths(from: threads)
+        let globalProjects = readGlobalProjects()
+        let projectPaths = mergeProjectPaths(
+            discoverProjectPaths(from: threads),
+            globalProjects.map(\.path)
+        )
         let projectIDsByPath = Dictionary(uniqueKeysWithValues: projectPaths.map { path in
             (path.path, projectID(for: path))
         })
 
-        var projectsByPath = Dictionary(uniqueKeysWithValues: projectPaths.map { path in
-            (
+        let projectEntries: [(String, CodexProject)] = projectPaths.map { path in
+            let globalProject = globalProjects.first { $0.path.path == path.path }
+            return (
                 path.path,
                 CodexProject(
                     id: projectID(for: path),
-                    name: projectName(for: path),
+                    name: globalProject?.name ?? projectName(for: path),
                     path: path,
                     source: .discovered,
                     chats: []
                 )
             )
-        })
+        }
+        var projectsByPath = Dictionary(uniqueKeysWithValues: projectEntries)
         var unassigned: [CodexThread] = []
 
         for var thread in threads.sorted(by: sortThreadsByUpdatedAtDescending) {
@@ -98,6 +104,23 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
         return Array(Set(paths)).sorted { lhs, rhs in
             lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
         }
+    }
+
+    private func mergeProjectPaths(_ discovered: [URL], _ global: [URL]) -> [URL] {
+        var seen: Set<String> = []
+        var result: [URL] = []
+
+        for path in global + discovered {
+            let standardized = path.standardizedFileURL
+            guard !seen.contains(standardized.path),
+                  !isGeneratedCodexWorkspace(standardized) else {
+                continue
+            }
+            seen.insert(standardized.path)
+            result.append(standardized)
+        }
+
+        return result
     }
 
     private func bestTitle(record: ThreadRecord?, indexEntry: SessionIndexEntry?) -> String {
@@ -230,6 +253,28 @@ public struct LiveCodexStoreScanner: CodexStoreScanning {
 
         return Set(ids)
     }
+
+    private func readGlobalProjects() -> [GlobalProject] {
+        guard FileManager.default.fileExists(atPath: paths.globalState.path),
+              let data = try? Data(contentsOf: paths.globalState),
+              let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+
+        let orderedPaths = (state["project-order"] as? [String])
+            ?? (state["electron-saved-workspace-roots"] as? [String])
+            ?? []
+        let labels = state["electron-workspace-root-labels"] as? [String: String] ?? [:]
+
+        return orderedPaths.map { rawPath in
+            let url = URL(fileURLWithPath: rawPath).standardizedFileURL
+            return GlobalProject(
+                path: url,
+                name: labels[rawPath]?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                    ?? projectName(for: url)
+            )
+        }
+    }
 }
 
 private struct SessionFileMetadata {
@@ -251,6 +296,17 @@ private struct SessionFileMetadata {
             return false
         }
         return true
+    }
+}
+
+private struct GlobalProject {
+    let path: URL
+    let name: String
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

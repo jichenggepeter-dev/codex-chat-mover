@@ -4,6 +4,7 @@ import Foundation
 try testSessionIndexReaderParsesJSONLines()
 try testSessionFileLocatorExtractsThreadIDFromRolloutFilename()
 try testScannerClassifiesCodexThreadsOutsideKnownProjects()
+try testScannerShowsProjectsFromGlobalStateWithoutThreads()
 try testScannerBackfillsThreadsMissingFromSQLite()
 try testScannerKeepsPinnedDelegationThreadsVisible()
 try testSessionJSONLPatcherUpdatesNestedCWD()
@@ -104,6 +105,31 @@ func testScannerClassifiesCodexThreadsOutsideKnownProjects() throws {
         expect(snapshot.unassignedThreads.last?.title == "Projectless planning chat", "scanner did not use session index title for projectless chat")
         expect(!snapshot.projects.flatMap(\.chats).contains { $0.id == "thread-subagent" }, "scanner should hide subagent threads")
     }
+
+func testScannerShowsProjectsFromGlobalStateWithoutThreads() throws {
+    let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-chat-mover-global-projects-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+    try """
+    {
+      "electron-saved-workspace-roots": ["/Users/example/Documents/empty-project"],
+      "project-order": ["/Users/example/Documents/empty-project"],
+      "electron-workspace-root-labels": {
+        "/Users/example/Documents/empty-project": "Custom Project Name"
+      }
+    }
+    """.write(to: codexHome.appendingPathComponent(".codex-global-state.json"), atomically: true, encoding: .utf8)
+
+    let scanner = LiveCodexStoreScanner(
+        paths: CodexPaths(codexHome: codexHome),
+        threadRecordReader: FixtureThreadRecordReader(records: [])
+    )
+    let snapshot = try scanner.scan()
+
+    expect(snapshot.projects.count == 1, "scanner should show projects saved in Codex global state")
+    expect(snapshot.projects.first?.name == "Custom Project Name", "scanner should use Codex project label")
+    expect(snapshot.projects.first?.chats.isEmpty == true, "global project without threads should be empty")
+}
 
 func testScannerBackfillsThreadsMissingFromSQLite() throws {
     let codexHome = URL(fileURLWithPath: NSTemporaryDirectory())
